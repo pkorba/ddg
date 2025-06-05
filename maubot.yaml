@@ -1,7 +1,9 @@
 maubot: 0.1.0
 id: com.github.pkorba.ddg
-version: 1.0.1
+version: 1.0.2
 license: MIT
 modules:
   - ddg
+dependencies:
+  - beautifulsoup4 >= 4.13.4
 main_class: DdgBot

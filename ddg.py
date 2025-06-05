@@ -1,6 +1,8 @@
 import aiohttp
 from maubot import Plugin, MessageEvent
 from maubot.handlers import command
+from mautrix.types import TextMessageEventContent, MessageType, Format
+from bs4 import BeautifulSoup
 
 
 class DdgBot(Plugin):
@@ -12,26 +14,73 @@ class DdgBot(Plugin):
         if not query:
             await evt.respond("Usage: !s <query>")
             return
-        url = await self.web_search(query)
-        if not url:
+        response = await self.get_result(query)
+        message = await self.prepare_message(response)
+        if not message:
             await evt.reply(f"Failed to find results for *{query}*")
             return
-        await evt.reply(f"{url}")
+        await evt.reply(message)
 
-    async def web_search(self, query: str) -> str:
+    async def get_result(self, query: str) -> str:
+        # TODO: refactor, handle case when theres no result (lite returns EOF link to google search)
         headers = {
             "Sec-GPC": "1",
             "accept-encoding": "gzip, deflate, br, zstd",
             "accept-language": "pl,en-US;q=0.7,en;q=0.3",
-            "user-agent": "Mozilla/5.0 (X11; Linux x86_64; rv:138.0) Gecko/20100101 Firefox/138.0"
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
-        url = f"https://lite.duckduckgo.com/lite/?q=\\+{query}"
+        params = {
+            "q": query,
+            "kd": "-1",  # Safe search: 1 on, -1 moderate, -2 off
+            "k1": "-1",  # Ads: 1 on, -1 off
+            "kl": "wt-wt"  # Region: wt-wt for no region
+        }
+        url = f"https://lite.duckduckgo.com/lite/"
         try:
             timeout = aiohttp.ClientTimeout(total=20)
-            response = await self.http.get(url, headers=headers, allow_redirects=True, timeout=timeout, raise_for_status=True)
-            result = str(response.url)
-            if "duckduckgo.com" not in result:
-                return result
+            response = await self.http.get(url, headers=headers, params=params, timeout=timeout, raise_for_status=True)
+            res_text = await response.text()
         except aiohttp.ClientError as e:
             self.log.error(f"Connection failed: {e}")
-        return ""
+            return ""
+        return res_text
+
+    async def prepare_message(self, text: str) -> TextMessageEventContent | None:
+        soup = BeautifulSoup(text, "html.parser")
+        if not soup:
+            self.log.error("Failed to parse the source.")
+            return None
+        link = soup.find("a", class_="result-link")
+        if not link:
+            self.log.error("Failed to find the link.")
+            return None
+        # When there are no results, DDG returns a link to Google Search
+        if link.text == "EOF" and (link["href"].startswith("http://www.google.com/search") or link["href"].startswith("https://www.google.com/search")):
+            return None
+        link_snippet = soup.find("td", class_="result-snippet")
+        link_snippet_text = link_snippet.text.strip() if link_snippet else ""
+
+        body = f"> **[{link.text}]({link["href"]})**  \n"
+        html = (
+            f"<blockquote>"
+            f"<a href=\"{link["href"]}\">"
+            f"<b>{link.text}</b>"
+            f"</a>"
+        )
+
+        if link_snippet_text:
+            body += f"> {link_snippet_text}  \n"
+            html += f"<p>{link_snippet_text}</p>"
+
+        body += f"> > **Results from DuckDuckGo**"
+        html += (
+            f"<p><b><sub>Results from DuckDuckGo</sub></b></p>"
+            f"</blockquote>"
+        )
+
+        return TextMessageEventContent(
+            msgtype=MessageType.NOTICE,
+            format=Format.HTML,
+            body=body,
+            formatted_body=html)
