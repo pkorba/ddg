@@ -22,17 +22,15 @@ class DdgBot(Plugin):
         await evt.reply(message)
 
     async def get_result(self, query: str) -> str:
-        # TODO: refactor, handle case when theres no result (lite returns EOF link to google search)
         headers = {
             "Sec-GPC": "1",
             "accept-encoding": "gzip, deflate, br, zstd",
             "accept-language": "pl,en-US;q=0.7,en;q=0.3",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
-            "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0"
         }
         params = {
             "q": query,
-            "kd": "-1",  # Safe search: 1 on, -1 moderate, -2 off
+            "kd": "-1",  # Redirect off
             "k1": "-1",  # Ads: 1 on, -1 off
             "kl": "wt-wt"  # Region: wt-wt for no region
         }
@@ -55,7 +53,7 @@ class DdgBot(Plugin):
         if not link:
             self.log.error("Failed to find the link.")
             return None
-        # When there are no results, DDG returns a link to Google Search
+        # When there are no results, DDG returns a link to Google Search with EOT title
         if link.text == "EOF" and (link["href"].startswith("http://www.google.com/search") or link["href"].startswith("https://www.google.com/search")):
             return None
         link_snippet = soup.find("td", class_="result-snippet")
