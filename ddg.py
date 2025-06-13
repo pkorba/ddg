@@ -1,84 +1,237 @@
+import asyncio
 import aiohttp
 from maubot import Plugin, MessageEvent
 from maubot.handlers import command
 from mautrix.types import TextMessageEventContent, MessageType, Format
-from bs4 import BeautifulSoup
+from mautrix.util.config import BaseProxyConfig, ConfigUpdateHelper
+from lxml import html
+from typing import Type
+
+
+class Config(BaseProxyConfig):
+    def do_update(self, helper: ConfigUpdateHelper) -> None:
+        helper.copy("region")
+        helper.copy("safesearch")
 
 
 class DdgBot(Plugin):
-    @command.new(name="s", help="Get the most relevant result from DuckDuckGo Web Search")
+    async def start(self) -> None:
+        await super().start()
+        self.config.load_and_update()
+
+    @command.new(name="ddg", aliases=["duckduckgo"], help="Get the most relevant result from DuckDuckGo Web Search")
     @command.argument("query", pass_raw=True, required=True)
     async def search(self, evt: MessageEvent, query: str) -> None:
         await evt.mark_read()
         query = query.strip()
         if not query:
-            await evt.respond("Usage: !s <query>")
+            await evt.reply("> **Usage:** !ddg <query>")
             return
+        # Duckduckgo doesn't accept queries longer than 500 characters
+        if len(query) >= 500:
+            await evt.reply("> Query is too long.")
+
+        message = None
         response = await self.get_result(query)
-        message = await self.prepare_message(response)
+        if response:
+            message = await asyncio.get_event_loop().run_in_executor(None, self.prepare_message, response)
         if not message:
-            await evt.reply(f"Failed to find results for *{query}*")
+            await evt.reply(f"> Failed to find results for *{query}*")
             return
         await evt.reply(message)
 
     async def get_result(self, query: str) -> str:
+        """
+        Get results from DuckDuckGo.
+        :param query: search query
+        :return: results HTML page
+        """
         headers = {
             "Sec-GPC": "1",
             "accept-encoding": "gzip, deflate, br, zstd",
-            "accept-language": "pl,en-US;q=0.7,en;q=0.3",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0"
+            "accept-language": "en,en-US;q=0.5",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+            "referer": "https://duckduckgo.com/"
         }
-        params = {
+        vqd = await self.get_vqd(query)
+        if not vqd:
+            self.log.error(f"Failed to obtain vqd token")
+            return ""
+
+        data = {
             "q": query,
+            "vqd": vqd,
             "kd": "-1",  # Redirect off
             "k1": "-1",  # Ads: 1 on, -1 off
-            "kl": "wt-wt"  # Region: wt-wt for no region
+            "kl": self.get_region(),  # Region: wt-wt for no region
+            "p": self.get_safesearch()  # Safe search
         }
-        url = f"https://lite.duckduckgo.com/lite/"
+        url = "https://lite.duckduckgo.com/lite/search"
         try:
             timeout = aiohttp.ClientTimeout(total=20)
-            response = await self.http.get(url, headers=headers, params=params, timeout=timeout, raise_for_status=True)
+            response = await self.http.post(url, headers=headers, data=data, timeout=timeout, raise_for_status=True)
             res_text = await response.text()
         except aiohttp.ClientError as e:
             self.log.error(f"Connection failed: {e}")
             return ""
         return res_text
 
-    async def prepare_message(self, text: str) -> TextMessageEventContent | None:
-        soup = BeautifulSoup(text, "html.parser")
-        if not soup:
-            self.log.error("Failed to parse the source.")
-            return None
-        link = soup.find("a", class_="result-link")
-        if not link:
-            self.log.error("Failed to find the link.")
-            return None
-        # When there are no results, DDG returns a link to Google Search with EOT title
-        if link.text == "EOF" and (link["href"].startswith("http://www.google.com/search") or link["href"].startswith("https://www.google.com/search")):
-            return None
-        link_snippet = soup.find("td", class_="result-snippet")
-        link_snippet_text = link_snippet.text.strip() if link_snippet else ""
+    async def get_vqd(self, query: str) -> str:
+        """
+        Get special search token required by DuckDuckGo
+        :param query: search query
+        :return: vqd token
+        """
+        url = "https://duckduckgo.com/"
+        # Make a request to above URL, and parse out the 'vqd'
+        # This is a special token, which should be used in the subsequent request
+        params = {
+            'q': query
+        }
+        timeout = aiohttp.ClientTimeout(total=20)
+        try:
+            response = await self.http.get(url, params=params, timeout=timeout, raise_for_status=True)
+            res_text = await response.text()
+            for c1, c1_len, c2 in (("vqd=\"", 5, "\""), ("vqd=", 4, "&"), ("vqd='", 5, "'")):
+                try:
+                    start = res_text.index(c1) + c1_len
+                    end = res_text.index(c2, start)
+                    token = res_text[start:end]
+                    return token
+                except ValueError:
+                    self.log.error(f"Token parsing failed")
+                    return ""
+        except aiohttp.ClientError as e:
+            self.log.error(f"Failed to obtain token. Connection failed: {e}")
+            return ""
 
-        body = f"> **[{link.text}]({link["href"]})**  \n"
-        html = (
+    def prepare_message(self, text: str) -> TextMessageEventContent | None:
+        """
+        Prepare message by parsing HTML content of results page
+        :param text: HTML content of results page
+        :return: message ready to be sent to the user
+        """
+        page = html.fromstring(text)
+        if page is None:
+            return None
+        link = page.xpath("//a[@class='result-link']")
+        link = link[0] if link else None
+        if link is None:
+            return None
+        link_text = link.text_content()
+        link = link.xpath("@href")
+        link = link[0] if link else ""
+        # When there are no results, DDG returns a link to Google Search with EOT title
+        if link_text == "EOF" and (link.startswith("http://www.google.com/search") or link.startswith("https://www.google.com/search")):
+            return None
+        link_snippet = page.xpath("//td[@class='result-snippet']")
+        link_snippet = link_snippet[0].text_content().strip() if link_snippet else ""
+
+        body = f"> **[{link_text}]({link})**  \n"
+        html_msg = (
             f"<blockquote>"
-            f"<a href=\"{link["href"]}\">"
-            f"<b>{link.text}</b>"
+            f"<a href=\"{link}\">"
+            f"<b>{link_text}</b>"
             f"</a>"
         )
-
-        if link_snippet_text:
-            body += f"> {link_snippet_text}  \n"
-            html += f"<p>{link_snippet_text}</p>"
-
+        if link_snippet:
+            body += f"> {link_snippet}  \n"
+            html_msg += f"<p>{link_snippet}</p>"
         body += f"> > **Results from DuckDuckGo**"
-        html += (
+        html_msg += (
             f"<p><b><sub>Results from DuckDuckGo</sub></b></p>"
             f"</blockquote>"
         )
-
         return TextMessageEventContent(
             msgtype=MessageType.NOTICE,
             format=Format.HTML,
             body=body,
-            formatted_body=html)
+            formatted_body=html_msg)
+
+    def get_safesearch(self) -> str:
+        safesearch_base = {
+            "on": "-1",
+            "off": "1"
+        }
+        return safesearch_base.get(self.config.get("safesearch", "on"), safesearch_base["on"])
+
+    def get_region(self) -> str:
+        # https://duckduckgo.com/duckduckgo-help-pages/settings/params
+        regions = [
+            "xa-ar",  # Arabia
+            "xa-en",  # Arabia (en)
+            "ar-es",  # Argentina
+            "au-en",  # Australia
+            "at-de",  # Austria
+            "be-fr",  # Belgium (fr)
+            "be-nl",  # Belgium (nl)
+            "br-pt",  # Brazil
+            "bg-bg",  # Bulgaria
+            "ca-en",  # Canada
+            "ca-fr",  # Canada (fr)
+            "ct-ca",  # Catalan
+            "cl-es",  # Chile
+            "cn-zh",  # China
+            "co-es",  # Colombia
+            "hr-hr",  # Croatia
+            "cz-cs",  # Czech Republic
+            "dk-da",  # Denmark
+            "ee-et",  # Estonia
+            "fi-fi",  # Finland
+            "fr-fr",  # France
+            "de-de",  # Germany
+            "gr-el",  # Greece
+            "hk-tzh",  # Hong Kong
+            "hu-hu",  # Hungary
+            "in-en",  # India
+            "id-id",  # Indonesia
+            "id-en",  # Indonesia (en)
+            "ie-en",  # Ireland
+            "il-he",  # Israel
+            "it-it",  # Italy
+            "jp-jp",  # Japan
+            "kr-kr",  # Korea
+            "lv-lv",  # Latvia
+            "lt-lt",  # Lithuania
+            "xl-es",  # Latin America
+            "my-ms",  # Malaysia
+            "my-en",  # Malaysia (en)
+            "mx-es",  # Mexico
+            "nl-nl",  # Netherlands
+            "nz-en",  # New Zealand
+            "no-no",  # Norway
+            "pe-es",  # Peru
+            "ph-en",  # Philippines
+            "ph-tl",  # Philippines (tl)
+            "pl-pl",  # Poland
+            "pt-pt",  # Portugal
+            "ro-ro",  # Romania
+            "ru-ru",  # Russia
+            "sg-en",  # Singapore
+            "sk-sk",  # Slovak Republic
+            "sl-sl",  # Slovenia
+            "za-en",  # South Africa
+            "es-es",  # Spain
+            "se-sv",  # Sweden
+            "ch-de",  # Switzerland (de)
+            "ch-fr",  # Switzerland (fr)
+            "ch-it",  # Switzerland (it)
+            "tw-tzh",  # Taiwan
+            "th-th",  # Thailand
+            "tr-tr",  # Turkey
+            "ua-uk",  # Ukraine
+            "uk-en",  # United Kingdom
+            "us-en",  # United States
+            "ue-es",  # United States (es)
+            "ve-es",  # Venezuela
+            "vn-vi",  # Vietnam
+            "wt-wt",  # No region
+        ]
+        region = self.config.get("region", "wt-wt").lower()
+        if region in regions:
+            return region
+        return "wt-wt"
+
+    @classmethod
+    def get_config_class(cls) -> Type[BaseProxyConfig]:
+        return Config
