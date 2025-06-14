@@ -23,7 +23,7 @@ class DdgBot(Plugin):
     @command.argument("query", pass_raw=True, required=True)
     async def search(self, evt: MessageEvent, query: str) -> None:
         await evt.mark_read()
-        query = query.strip()
+        query = query.strip().replace("!", "").replace("\\", "")
         if not query:
             await evt.reply("> **Usage:** !ddg <query>")
             return
