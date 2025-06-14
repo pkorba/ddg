@@ -149,6 +149,10 @@ class DdgBot(Plugin):
             formatted_body=html_msg)
 
     def get_safesearch(self) -> str:
+        """
+        Get safe search filter status from config
+        :return: Value corresponding to safe search status
+        """
         safesearch_base = {
             "on": "-1",
             "off": "1"
@@ -156,6 +160,10 @@ class DdgBot(Plugin):
         return safesearch_base.get(self.config.get("safesearch", "on"), safesearch_base["on"])
 
     def get_region(self) -> str:
+        """
+        Get search region from config
+        :return: Search region
+        """
         # https://duckduckgo.com/duckduckgo-help-pages/settings/params
         regions = [
             "xa-ar",  # Arabia
