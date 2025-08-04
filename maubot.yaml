@@ -1,6 +1,6 @@
 maubot: 0.1.0
 id: com.github.pkorba.ddg
-version: 1.2.1
+version: 1.2.2
 license: MIT
 modules:
   - ddg
