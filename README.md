@@ -1,14 +1,14 @@
 # Ddg Bot
 
-A maubot for Matrix messaging that performs an web search on user's behalf using DuckDuckGo and responds with the best matching result.
+A maubot plugin that performs a web search on user's behalf using DuckDuckGo and responds with the best matching result.
 
 ![bot_ddg](https://github.com/user-attachments/assets/5066d2b3-4cf8-4595-a607-2e4efd7a131f)
 
 ## Usage
 Type the query you'd want to pass to the search engine.
 ```
-[p]ddg query
-[p]duckduckgo query
+!ddg query
+!duckduckgo query
 ```
 
 ## Configuration
