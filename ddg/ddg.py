@@ -28,7 +28,7 @@ class DdgBot(Plugin):
         if not query:
             await evt.reply("> **Usage:** !ddg <query>")
             return
-        # Duckduckgo doesn't accept queries longer than 500 characters
+        # DuckDuckGo doesn't accept queries longer than 500 characters
         if len(query) >= 500:
             await evt.reply("> Query is too long.")
 
@@ -56,7 +56,7 @@ class DdgBot(Plugin):
         }
         vqd = await self.get_vqd(query)
         if not vqd:
-            self.log.error(f"Failed to obtain vqd token")
+            self.log.error("Failed to obtain vqd token")
             return ""
 
         data = {
@@ -100,7 +100,7 @@ class DdgBot(Plugin):
                     token = res_text[start:end]
                     return token
                 except ValueError:
-                    self.log.error(f"Token parsing failed")
+                    self.log.error("Token parsing failed")
                     return ""
         except aiohttp.ClientError as e:
             self.log.error(f"Failed to obtain token. Connection failed: {e}")
@@ -138,10 +138,10 @@ class DdgBot(Plugin):
         if link_snippet:
             body += f"> {link_snippet}  \n"
             html_msg += f"<p>{link_snippet}</p>"
-        body += f"> > **Results from DuckDuckGo**"
+        body += "> > **Results from DuckDuckGo**"
         html_msg += (
-            f"<p><b><sub>Results from DuckDuckGo</sub></b></p>"
-            f"</blockquote>"
+            "<p><b><sub>Results from DuckDuckGo</sub></b></p>"
+            "</blockquote>"
         )
         return TextMessageEventContent(
             msgtype=MessageType.NOTICE,
